@@ -1,0 +1,135 @@
+clear;
+clc;
+data = readtable("C:\Users\jeshw\OneDrive\Desktop\New folder\Dataset\CBC Report.csv");
+
+% Remove unnecessary columns
+data(:, {'Serial','Date'}) = [];
+
+% Convert categorical variables to numeric
+data.Gender = double(categorical(data.Gender));
+data.Result = double(categorical(data.Result));
+
+% Handle NaNs
+nan_count = sum(ismissing(data), 1); 
+
+% Identify numerical columns
+numericalCols = varfun(@isnumeric, data, 'OutputFormat', 'uniform');
+
+% Perform median imputation for missing values
+for i = 1:width(data)
+    if numericalCols(i)
+        columnData = data{:, i};
+        medianValue = median(columnData, 'omitnan'); % Ignore NaNs
+        columnData(isnan(columnData)) = medianValue;
+        data{:, i} = columnData;
+    end
+end
+
+% Verify NaN handling
+nan_count_after = sum(ismissing(data), 1);
+
+% Extract features and labels
+X = table2array(data(:, 1:end-1)); % Features
+y = table2array(data(:, end)); % Labels
+
+% Normalization (Min-Max Scaling)
+X_min = min(X);
+X_max = max(X);
+X = (X - X_min) ./ (X_max - X_min);
+
+% Identify minority and majority class
+classes = unique(y);
+class_counts = histcounts(y, length(classes));
+
+[~, minorityClassIdx] = min(class_counts);
+[~, majorityClassIdx] = max(class_counts);
+
+minorityClass = classes(minorityClassIdx);
+majorityClass = classes(majorityClassIdx);
+
+% Get minority and majority samples
+X_minority = X(y == minorityClass, :);
+X_majority = X(y == majorityClass, :);
+
+% Define parameters for SMOTE
+k = 5; % Number of nearest neighbors
+numSyntheticSamples = size(X_majority, 1) - size(X_minority, 1); % Balance classes
+
+% Compute nearest neighbors for minority class
+Idx = knnsearch(X_minority, X_minority, 'K', k+1); % k+1 to exclude the point itself
+Idx = Idx(:, 2:end); % Remove the first column, which is the point itself
+
+% Generate synthetic samples
+syntheticData = [];
+rng(42);
+for i = 1:numSyntheticSamples
+    idx = randi(size(X_minority, 1)); % Random minority instance
+    nn_idx = Idx(idx, randi(k)); % Random neighbor
+
+    % Create synthetic sample using linear interpolation
+    diff = X_minority(nn_idx, :) - X_minority(idx, :);
+    gap = rand(1, size(diff, 2));
+    syntheticSample = X_minority(idx, :) + gap .* diff;
+
+    syntheticData = [syntheticData; syntheticSample];
+end
+
+
+% Combine original and synthetic data
+X_balanced = [X; syntheticData];
+y_balanced = [y; repmat(minorityClass, size(syntheticData, 1), 1)];
+
+% Split into training and testing sets
+cv = cvpartition(size(X_balanced, 1), 'HoldOut', 0.2);
+X_train = X_balanced(training(cv), :);
+y_train = y_balanced(training(cv), :);
+X_test = X_balanced(test(cv), :);
+y_test = y_balanced(test(cv), :);
+
+%%
+% Train the KNN classifier
+k = 4;
+knn_model = fitcknn(X_train, y_train, 'NumNeighbors', k);
+
+% Predictions on the test set
+y_pred = predict(knn_model, X_test);
+
+% Calculate accuracy
+accuracy = sum(y_pred == y_test) / length(y_test);
+
+% Display confusion matrix
+confusionMat = confusionmat(y_test, y_pred);
+
+fprintf('KNN Classifier Accuracy: %.2f%%\n', accuracy * 100);
+disp('Confusion Matrix:');
+disp(confusionMat);
+%%
+%  model
+% Train the Random Forest 
+numTrees = 100;
+rfModel = TreeBagger(numTrees, X_train, y_train, 'OOBPrediction', 'On', 'Method', 'classification');
+
+% Predict the labels for the test set
+YPred = str2double(predict(rfModel, X_test));
+confusionMat = confusionmat(y_test, YPred);
+
+% Calculate accuracy
+accuracy = sum(YPred == y_test) / length(y_test);
+fprintf('Random Forest Accuracy: %.2f%%\n', accuracy*100);
+disp('Confusion Matrix:');
+disp(confusionMat); 
+%%
+% Train SVM classifier
+SVMModel = fitcsvm(X_train, y_train, 'KernelFunction', 'linear', 'Standardize', true);
+
+% Predict on test data
+y_pred = predict(SVMModel, X_test);
+
+% Evaluate performance
+accuracy = sum(y_pred == y_test) / length(y_test) * 100;
+fprintf('SVM Accuracy: %.2f%%\n', accuracy);
+
+% Confusion matrix
+confMat = confusionmat(y_test, y_pred);
+disp('Confusion Matrix:');
+disp(confMat);
